@@ -1,0 +1,15 @@
+{
+    "image": "node:22",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "dbaeumer.vscode-eslint",
+                "esbenp.prettier-vscode",
+                "vitest.explorer",
+                "eamodio.gitlens",
+                "augment.vscode-augment",
+                "sonarsource.sonarlint-vscode"
+            ]
+        }
+    }
+}
