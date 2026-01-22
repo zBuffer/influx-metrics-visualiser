@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie
 } from 'recharts';
@@ -676,6 +676,10 @@ export default function App() {
     });
   }, [metricsHistory, selectedHist, selectedSummary, selectedCounter]);
 
+  // Refs to track previous selected metrics (to detect actual selection changes)
+  const prevSelectedHistRef = useRef(selectedHist);
+  const prevSelectedCounterRef = useRef(selectedCounter);
+
   // Update available labels for Histogram
   useEffect(() => {
       const currentSnapshot = metricsHistory[metricsHistory.length - 1]?.metrics;
@@ -692,8 +696,14 @@ export default function App() {
                   if (k !== 'le') keys.add(k);
               });
           });
-          setAvailableHistLabels(Array.from(keys));
-          setSelectedHistGroupBy('All'); 
+          const newLabels = Array.from(keys);
+          setAvailableHistLabels(newLabels);
+
+          // Only reset groupBy if the selected histogram actually changed
+          if (prevSelectedHistRef.current !== selectedHist) {
+              setSelectedHistGroupBy('All');
+              prevSelectedHistRef.current = selectedHist;
+          }
       }
   }, [selectedHist, metricsHistory]);
 
@@ -710,8 +720,14 @@ export default function App() {
         series.forEach(s => {
             Object.keys(s.labels).forEach(k => keys.add(k));
         });
-        setAvailableCounterLabels(Array.from(keys));
-        setSelectedCounterGroupBy('All');
+        const newLabels = Array.from(keys);
+        setAvailableCounterLabels(newLabels);
+
+        // Only reset groupBy if the selected counter actually changed
+        if (prevSelectedCounterRef.current !== selectedCounter) {
+            setSelectedCounterGroupBy('All');
+            prevSelectedCounterRef.current = selectedCounter;
+        }
     }
   }, [selectedCounter, metricsHistory]);
 
@@ -1409,34 +1425,52 @@ export default function App() {
                             <div className="lg:col-span-2">
                                 <Card title={getChartTitle('Distribution', selectedHist, selectedHistGroupBy)} className="h-96">
                                      {activeHistResult.data.length > 0 ? (
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <BarChart data={activeHistResult.data} margin={{bottom: 20}}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                <XAxis 
-                                                    dataKey="range" 
-                                                    stroke="#94a3b8" 
-                                                    angle={-45} 
-                                                    textAnchor="end" 
-                                                    height={60} 
-                                                    fontSize={10} 
-                                                />
-                                                <YAxis stroke="#94a3b8" />
-                                                <RechartsTooltip 
-                                                    cursor={{fill: 'transparent'}} 
-                                                    contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
-                                                />
-                                                <Legend />
-                                                {activeHistResult.keys.map((key, index) => (
-                                                    <Bar 
-                                                        key={key} 
-                                                        dataKey={key} 
-                                                        stackId="a" 
-                                                        fill={CHART_COLORS[index % CHART_COLORS.length]} 
-                                                        name={key}
-                                                    />
-                                                ))}
-                                            </BarChart>
-                                        </ResponsiveContainer>
+                                        <div className="flex flex-col h-full">
+                                            <div className="flex-1 min-h-0">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <BarChart data={activeHistResult.data} margin={{bottom: 20}}>
+                                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                        <XAxis
+                                                            dataKey="range"
+                                                            stroke="#94a3b8"
+                                                            angle={-45}
+                                                            textAnchor="end"
+                                                            height={60}
+                                                            fontSize={10}
+                                                        />
+                                                        <YAxis stroke="#94a3b8" />
+                                                        <RechartsTooltip
+                                                            cursor={{fill: 'transparent'}}
+                                                            contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
+                                                        />
+                                                        {activeHistResult.keys.map((key, index) => (
+                                                            <Bar
+                                                                key={key}
+                                                                dataKey={key}
+                                                                stackId="a"
+                                                                fill={CHART_COLORS[index % CHART_COLORS.length]}
+                                                                name={key}
+                                                            />
+                                                        ))}
+                                                    </BarChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                            {activeHistResult.keys.length > 0 && (
+                                                <div className={`flex-shrink-0 pt-2 border-t border-slate-200 dark:border-slate-700 ${activeHistResult.keys.length > 6 ? 'max-h-20 overflow-y-auto' : ''}`}>
+                                                    <div className="flex flex-wrap gap-x-3 gap-y-1 justify-center">
+                                                        {activeHistResult.keys.map((key, index) => (
+                                                            <div key={key} className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                                                                <span
+                                                                    className="w-3 h-3 rounded-sm flex-shrink-0"
+                                                                    style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+                                                                />
+                                                                <span className="truncate max-w-[120px]" title={key}>{key}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                      ) : <div className="flex items-center justify-center h-full text-slate-400">Select a histogram</div>}
                                 </Card>
                             </div>
