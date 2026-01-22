@@ -470,10 +470,12 @@ const StatBadge = ({ label, value, subtext, icon: Icon, color = "blue", alert = 
 
 export default function App() {
   const [url, setUrl] = useState('http://localhost:8086/metrics');
+  const [useProxy, setUseProxy] = useState(true); // Use CORS proxy by default
   const [polling, setPolling] = useState(false);
-  const [intervalMs, setIntervalMs] = useState(2000); 
+  const [intervalMs, setIntervalMs] = useState(2000);
   const [metricsHistory, setMetricsHistory] = useState([]);
   const [error, setError] = useState(null);
+  const [errorType, setErrorType] = useState(null); // 'cors', 'network', 'timeout', 'http', 'parse'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [rawInput, setRawInput] = useState('');
   const [lastFetchTime, setLastFetchTime] = useState(null);
@@ -496,33 +498,75 @@ export default function App() {
 
   // Poll Logic
   const fetchMetrics = useCallback(async () => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), intervalMs);
+    const maxRetries = 5;
+    let lastError = null;
+    let lastErrorType = null;
 
-    try {
-      const response = await fetch(url, { signal: controller.signal });
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), intervalMs);
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const text = await response.text();
+      try {
+        // Use proxy endpoint if enabled, otherwise fetch directly
+        const fetchUrl = useProxy
+          ? `/api/proxy?url=${encodeURIComponent(url)}`
+          : url;
 
-      const parsed = parsePrometheusMetrics(text);
-      const timestamp = new Date().getTime();
+        const response = await fetch(fetchUrl, { signal: controller.signal });
 
-      setMetricsHistory(prev => {
-        const newHistory = [...prev, { timestamp, metrics: parsed }];
-        if (newHistory.length > 60) return newHistory.slice(newHistory.length - 60);
-        return newHistory;
-      });
-      setError(null);
-      setLastFetchTime(new Date());
-    } catch (e) {
-      console.error("Fetch error:", e);
-      setError(e.name === 'AbortError' ? 'Request timed out' : e.message);
-      setPolling(false);
-    } finally {
-      clearTimeout(timeoutId);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const text = await response.text();
+
+        const parsed = parsePrometheusMetrics(text);
+        const timestamp = new Date().getTime();
+
+        setMetricsHistory(prev => {
+          const newHistory = [...prev, { timestamp, metrics: parsed }];
+          if (newHistory.length > 60) return newHistory.slice(newHistory.length - 60);
+          return newHistory;
+        });
+        setError(null);
+        setErrorType(null);
+        setLastFetchTime(new Date());
+        return; // Success - exit the retry loop
+      } catch (e) {
+        clearTimeout(timeoutId);
+        console.error(`Fetch error (attempt ${attempt}/${maxRetries}):`, e);
+
+        // Determine error type for better user guidance
+        let errType = 'network';
+        let errMsg = e.message || 'Unknown error';
+
+        if (e.name === 'AbortError') {
+          errType = 'timeout';
+          errMsg = 'Request timed out';
+        } else if (e.name === 'TypeError' || (e.message && e.message.toLowerCase().includes('failed to fetch'))) {
+          // TypeError with "Failed to fetch" is the typical CORS or network error signature
+          // When CORS blocks a request, the browser throws TypeError without detailed info
+          errType = 'cors';
+          errMsg = 'Network request failed (likely CORS or connection issue)';
+        } else if (e.message && e.message.includes('HTTP error')) {
+          errType = 'http';
+        }
+
+        lastError = errMsg;
+        lastErrorType = errType;
+
+        // If this was the last attempt, don't wait before exiting
+        if (attempt < maxRetries) {
+          // Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms)
+          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt - 1)));
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
-  }, [url, intervalMs]);
+
+    // All retries exhausted - set error state
+    setError(`${lastError} (after ${maxRetries} attempts)`);
+    setErrorType(lastErrorType);
+    setPolling(false);
+  }, [url, intervalMs, useProxy]);
 
   const handleManualParse = () => {
     try {
@@ -539,10 +583,12 @@ export default function App() {
       if (disc.counters.length > 0) setSelectedCounter(disc.counters[0]);
 
       setError(null);
-      setActiveTab('explorer'); 
+      setErrorType(null);
+      setActiveTab('explorer');
       setLastFetchTime(new Date());
     } catch (e) {
       setError("Failed to parse input text");
+      setErrorType('parse');
     }
   };
 
@@ -837,16 +883,10 @@ export default function App() {
             
             <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
-                    onClick={() => {
-                        if (polling) setPolling(false);
-                        else {
-                            setPolling(true);
-                            fetchMetrics();
-                        }
-                    }}
+                    onClick={() => setPolling(!polling)}
                     className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        polling 
-                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300' 
+                        polling
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300'
                         : 'bg-blue-600 text-white hover:bg-blue-700'
                     }`}
                 >
@@ -859,9 +899,31 @@ export default function App() {
             <div className="mb-8 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl flex items-start gap-3">
                 <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
                 <div>
-                    <h3 className="text-sm font-semibold text-red-800 dark:text-red-300">Connection Error</h3>
+                    <h3 className="text-sm font-semibold text-red-800 dark:text-red-300">
+                        {errorType === 'cors' ? 'Connection Blocked (CORS/Network)' :
+                         errorType === 'timeout' ? 'Request Timeout' :
+                         errorType === 'http' ? 'HTTP Error' : 'Connection Error'}
+                    </h3>
                     <p className="text-sm text-red-600 dark:text-red-400 mt-1">{error}</p>
-                    <p className="text-xs text-red-500 dark:text-red-400 mt-2">Check CORS settings or use "Settings &gt; Manual Input".</p>
+                    {errorType === 'cors' && (
+                        <div className="mt-3 p-3 bg-red-100 dark:bg-red-900/40 rounded-lg">
+                            <p className="text-xs font-medium text-red-700 dark:text-red-300 mb-2">To fix CORS issues, try one of these:</p>
+                            <ul className="text-xs text-red-600 dark:text-red-400 space-y-1 list-disc list-inside">
+                                <li><strong>Enable CORS Proxy</strong> in Settings (recommended) - routes requests through the server</li>
+                                <li><strong>Use Manual Input</strong> in Settings - paste output from <code className="bg-red-200 dark:bg-red-800 px-1 rounded">curl {url}</code></li>
+                                <li>If InfluxDB is local, ensure it's running and the URL is correct</li>
+                            </ul>
+                        </div>
+                    )}
+                    {errorType === 'timeout' && (
+                        <p className="text-xs text-red-500 dark:text-red-400 mt-2">The server took too long to respond. Check if the metrics endpoint is accessible.</p>
+                    )}
+                    {errorType === 'http' && (
+                        <p className="text-xs text-red-500 dark:text-red-400 mt-2">The server returned an error. Check the URL and server status.</p>
+                    )}
+                    {!errorType && (
+                        <p className="text-xs text-red-500 dark:text-red-400 mt-2">Check connection settings or use "Settings &gt; Manual Input".</p>
+                    )}
                 </div>
             </div>
         )}
@@ -902,6 +964,24 @@ export default function App() {
                                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm outline-none"
                             />
                             <p className="text-xs text-slate-400 mt-1">Min: 100ms, Max: 60000ms</p>
+                        </div>
+                        <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Use CORS Proxy</label>
+                                <p className="text-xs text-slate-400 mt-0.5">Route requests through server to bypass CORS restrictions</p>
+                            </div>
+                            <button
+                                onClick={() => setUseProxy(!useProxy)}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                    useProxy ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                                }`}
+                            >
+                                <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                        useProxy ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                                />
+                            </button>
                         </div>
                     </div>
                 </Card>
