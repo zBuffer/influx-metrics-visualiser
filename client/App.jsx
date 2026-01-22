@@ -6,6 +6,7 @@ import {
   Activity, Database, AlertCircle, Cpu, HardDrive, Clock, Play, Pause, FileText, Wifi, Layers, Timer, Zap, AlertTriangle, BarChart2, ListFilter, GripHorizontal, Hash
 } from 'lucide-react';
 import { formatCount, formatBytes, formatDuration, formatPercent } from './src/formatters';
+import ExplorerDashboard from './src/ExplorerDashboard';
 
 // --- Parser Logic ---
 
@@ -518,6 +519,7 @@ export default function App() {
   const [polling, setPolling] = useState(false);
   const [intervalMs, setIntervalMs] = useState(2000);
   const [metricsHistory, setMetricsHistory] = useState([]);
+  const [currentMetricsText, setCurrentMetricsText] = useState(''); // Raw text for ExplorerDashboard
   const [error, setError] = useState(null);
   const [errorType, setErrorType] = useState(null); // 'cors', 'network', 'timeout', 'http', 'parse'
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -569,6 +571,7 @@ export default function App() {
           if (newHistory.length > 60) return newHistory.slice(-60);
           return newHistory;
         });
+        setCurrentMetricsText(text); // Store raw text for ExplorerDashboard
         setError(null);
         setErrorType(null);
         setLastFetchTime(new Date());
@@ -617,11 +620,12 @@ export default function App() {
       const parsed = parsePrometheusMetrics(rawInput);
       const timestamp = Date.now();
       setMetricsHistory(prev => [...prev, { timestamp, metrics: parsed }].slice(-60));
-      
+      setCurrentMetricsText(rawInput); // Store raw text for ExplorerDashboard
+
       // Auto-discover
       const disc = discoverDistributions(parsed);
       setDiscovered(disc);
-      
+
       if (disc.histograms.length > 0) setSelectedHist(disc.histograms[0]);
       if (disc.summaries.length > 0) setSelectedSummary(disc.summaries[0]);
       if (disc.counters.length > 0) setSelectedCounter(disc.counters[0]);
@@ -913,9 +917,9 @@ export default function App() {
                     key={tab}
                     onClick={() => setActiveTab(tab)}
                     className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all capitalize whitespace-nowrap ${
-                    activeTab === tab 
-                        ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow-sm' 
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'
+                    activeTab === tab
+                        ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white'
                     }`}
                 >
                     {tab === 'explorer' ? 'Explorer' : tab}
@@ -1304,6 +1308,11 @@ export default function App() {
 
         {/* --- EXPLORER TAB --- */}
         {activeTab === 'explorer' && (
+            <ExplorerDashboard metricsText={currentMetricsText} />
+        )}
+
+        {/* --- LEGACY EXPLORER TAB (Preserved for comparison, hidden) --- */}
+        {activeTab === 'legacy-explorer' && (
             <div className="space-y-8">
                 <div className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg text-sm text-slate-600 dark:text-slate-300">
                     <p className="font-semibold flex items-center gap-2"><ListFilter size={16}/> Auto-Discovered Metrics</p>

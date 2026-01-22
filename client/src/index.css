@@ -8,3 +8,21 @@ html, body, #root {
   padding: 0;
 }
 
+/* React Grid Layout - ensure proper sizing during resize */
+.react-grid-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.react-grid-item > div {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Fix for Recharts ResponsiveContainer during resize */
+.react-grid-item.resizing .recharts-responsive-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
