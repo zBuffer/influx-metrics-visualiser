@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { 
-  LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, ComposedChart, Scatter, PieChart, Pie
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie
 } from 'recharts';
-import { 
-  Activity, Server, Database, AlertCircle, RefreshCw, Cpu, HardDrive, Clock, CheckCircle2, XCircle, Play, Pause, FileText, Wifi, Layers, Timer, Zap, AlertTriangle, BarChart2, ListFilter, GripHorizontal, Hash
+import {
+  Activity, Database, AlertCircle, Cpu, HardDrive, Clock, Play, Pause, FileText, Wifi, Layers, Timer, Zap, AlertTriangle, BarChart2, ListFilter, GripHorizontal, Hash
 } from 'lucide-react';
+import { formatCount, formatBytes, formatDuration, formatPercent } from './src/formatters';
 
 // --- Parser Logic ---
 
@@ -22,11 +23,11 @@ const parsePrometheusMetrics = (text) => {
     const match = trimmed.match(regex);
     if (match) {
       const [, name, labelStr, valueStr] = match;
-      let value = parseFloat(valueStr);
-      if (isNaN(value)) {
+      let value = Number.parseFloat(valueStr);
+      if (Number.isNaN(value)) {
           if (valueStr === "+Inf" || valueStr === "Inf") value = Infinity;
           else if (valueStr === "-Inf") value = -Infinity;
-          else value = 0; 
+          else value = 0;
       }
 
       const labels = {};
@@ -39,9 +40,9 @@ const parsePrometheusMetrics = (text) => {
           const k = labelMatch[1];
           // Unescape escaped characters: \" -> ", \\ -> \, \n -> newline
           const v = labelMatch[2]
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\')
-            .replace(/\\n/g, '\n');
+            .replaceAll(String.raw`\"`, '"')
+            .replaceAll(String.raw`\\`, '\\')
+            .replaceAll(String.raw`\n`, '\n');
           labels[k] = v;
         }
       }
@@ -57,29 +58,27 @@ const parsePrometheusMetrics = (text) => {
 
 // --- Helper Functions ---
 
-const formatBytes = (bytes, decimals = 2) => {
-  if (bytes === null || bytes === undefined || isNaN(bytes)) return '--';
-  if (!isFinite(bytes)) return bytes > 0 ? '∞' : '-∞';
-  if (bytes === 0) return '0 B';
-  if (bytes < 0) return '-' + formatBytes(-bytes, decimals);
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+/**
+ * Returns a user-friendly title for the given error type.
+ */
+const getErrorTitle = (errorType) => {
+  switch (errorType) {
+    case 'cors': return 'Connection Blocked (CORS/Network)';
+    case 'timeout': return 'Request Timeout';
+    case 'http': return 'HTTP Error';
+    default: return 'Connection Error';
+  }
 };
 
-const formatDuration = (seconds) => {
-    if (seconds === undefined || seconds === null || isNaN(seconds)) return '--';
-    if (!isFinite(seconds)) return seconds > 0 ? '∞' : '-∞';
-    if (seconds === 0) return '0s';
-    if (seconds < 0) return '-' + formatDuration(-seconds);
-    if (seconds < 0.000001) return (seconds * 1000000000).toFixed(0) + 'ns';
-    if (seconds < 0.001) return (seconds * 1000000).toFixed(0) + 'μs';
-    if (seconds < 1) return (seconds * 1000).toFixed(1) + 'ms';
-    if (seconds < 60) return seconds.toFixed(2) + 's';
-    return (seconds / 60).toFixed(1) + 'm';
+/**
+ * Generates a chart title with an optional groupBy suffix.
+ */
+const getChartTitle = (prefix, metricName, groupBy) => {
+  const suffix = groupBy === 'All' ? '' : ` (by ${groupBy})`;
+  return `${prefix}: ${metricName}${suffix}`;
 };
+
+
 
 const getMetricValue = (metrics, name, labelFilters = {}) => {
   const metricSeries = metrics.get(name);
@@ -93,6 +92,21 @@ const getMetricValue = (metrics, name, labelFilters = {}) => {
 };
 
 // --- Histogram & Summary Helpers ---
+
+/**
+ * Determines the group key for a metric item based on the groupBy parameter.
+ * Used by histogram and counter breakdown functions.
+ */
+const getGroupKey = (labels, groupBy) => {
+    if (!groupBy) return 'All';
+    if (groupBy === 'method + path') {
+        const m = labels.method || '';
+        const p = labels.path || '';
+        return m && p ? `${m} ${p}` : (m || p || 'Other');
+    }
+    if (labels[groupBy]) return labels[groupBy];
+    return 'Other';
+};
 
 const discoverDistributions = (metrics) => {
     const histograms = new Set();
@@ -129,27 +143,15 @@ const computeHistogramData = (metrics, baseName, groupBy) => {
     series.forEach(item => {
         const le = item.labels.le;
         if (!le) return;
-        
-        allLe.add(le);
 
-        let groupKey = 'Total';
-        if (groupBy === 'method + path') {
-             const m = item.labels.method || '';
-             const p = item.labels.path || '';
-             groupKey = m && p ? `${m} ${p}` : (m || p || 'Other');
-        } else if (groupBy && item.labels[groupBy]) {
-            groupKey = item.labels[groupBy];
-        } else if (groupBy) {
-            groupKey = 'Other'; 
-        } else {
-            groupKey = 'All';
-        }
+        allLe.add(le);
+        const groupKey = getGroupKey(item.labels, groupBy);
 
         if (!groups[groupKey]) groups[groupKey] = {};
         groups[groupKey][le] = (groups[groupKey][le] || 0) + item.value;
     });
 
-    const sortedLe = Array.from(allLe).map(l => l === '+Inf' ? Infinity : parseFloat(l)).sort((a, b) => a - b);
+    const sortedLe = Array.from(allLe).map(l => l === '+Inf' ? Infinity : Number.parseFloat(l)).sort((a, b) => a - b);
     const sortedLeStr = sortedLe.map(l => l === Infinity ? '+Inf' : l.toString());
 
     const result = sortedLe.map((leVal, idx) => {
@@ -190,19 +192,7 @@ const computeCounterBreakdown = (metrics, metricName, groupBy) => {
     const groups = {};
 
     series.forEach(item => {
-        let groupKey = 'Total';
-        if (groupBy === 'method + path') {
-             const m = item.labels.method || '';
-             const p = item.labels.path || '';
-             groupKey = m && p ? `${m} ${p}` : (m || p || 'Other');
-        } else if (groupBy && item.labels[groupBy]) {
-            groupKey = item.labels[groupBy];
-        } else if (groupBy) {
-            groupKey = 'Other'; 
-        } else {
-            groupKey = 'All';
-        }
-
+        const groupKey = getGroupKey(item.labels, groupBy);
         groups[groupKey] = (groups[groupKey] || 0) + item.value;
     });
 
@@ -234,7 +224,7 @@ const computeSummaryData = (metrics, name) => {
     });
 
     // Get sorted unique quantiles for X-axis
-    const sortedQuantiles = Array.from(allQuantiles).sort((a, b) => parseFloat(a) - parseFloat(b));
+    const sortedQuantiles = Array.from(allQuantiles).sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b));
 
     // Identify Top N series by max value to reduce noise
     const topSeries = Object.entries(groups)
@@ -244,7 +234,7 @@ const computeSummaryData = (metrics, name) => {
 
     // Pivot for Recharts BarChart: [{ name: "0.5", series1: 10, series2: 20 }, { name: "0.9", ... }]
     const chartData = sortedQuantiles.map(q => {
-        const row = { name: `P${parseFloat(q) * 100}` }; // e.g., P50, P90
+        const row = { name: `P${Number.parseFloat(q) * 100}` }; // e.g., P50, P90
         topSeries.forEach(seriesName => {
             row[seriesName] = groups[seriesName][q] || 0;
         });
@@ -276,7 +266,7 @@ const computeRateDistribution = (currMetrics, prevMetrics, metricName, filterFn,
         const curr = currBuckets[le];
         const prev = prevBuckets[le] || 0;
         const rate = Math.max(0, (curr - prev) / timeDiff);
-        rates.push({ le: le === '+Inf' ? Infinity : parseFloat(le), rate, leLabel: le });
+        rates.push({ le: le === '+Inf' ? Infinity : Number.parseFloat(le), rate, leLabel: le });
     });
 
     rates.sort((a, b) => a.le - b.le);
@@ -390,7 +380,7 @@ const MemoryGauge = ({ value, max, label, sublabel, color = '#8b5cf6' }) => {
         />
         {/* Center text */}
         <text x="80" y="60" textAnchor="middle" className="fill-slate-800 dark:fill-white text-xl font-bold">
-          {percentage.toFixed(1)}%
+          {formatPercent(percentage, 1, false)}
         </text>
         <text x="80" y="78" textAnchor="middle" className="fill-slate-500 dark:fill-slate-400 text-xs">
           {formatBytes(value, 1)}
@@ -420,12 +410,33 @@ const renderCustomPieLabel = ({ cx, cy, midAngle, outerRadius, percent, name }) 
       dominantBaseline="central"
       className="fill-slate-600 dark:fill-slate-300 text-xs"
     >
-      {name} ({(percent * 100).toFixed(0)}%)
+      {name} ({formatPercent(percent, 0)})
     </text>
   );
 };
 
 // --- Components ---
+
+/**
+ * Mini stat box with white background - used for throughput stats
+ */
+const MiniStat = ({ label, value, subtext, colorClass = "text-slate-700 dark:text-slate-300" }) => (
+  <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+    <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">{label}</p>
+    <p className={`text-lg font-bold ${colorClass}`}>{value}</p>
+    {subtext && <p className="text-xs text-slate-400">{subtext}</p>}
+  </div>
+);
+
+/**
+ * Centered stat box for inside cards - used for resource counts
+ */
+const CenteredStat = ({ value, label, colorClass = "text-slate-700 dark:text-slate-300" }) => (
+  <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+    <p className={`text-2xl font-bold ${colorClass}`}>{value}</p>
+    <p className="text-xs text-slate-500 dark:text-slate-400">{label}</p>
+  </div>
+);
 
 const Card = ({ title, children, icon: Icon, className = "" }) => (
   <div className={`bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-5 flex flex-col ${className}`}>
@@ -465,6 +476,39 @@ const StatBadge = ({ label, value, subtext, icon: Icon, color = "blue", alert = 
     </div>
   );
 };
+
+/**
+ * Reusable metric selector list component for explorer tab.
+ * Displays a scrollable list of metric buttons.
+ */
+const MetricSelectorList = ({
+  label,
+  items,
+  selectedItem,
+  onSelect,
+  selectedColorClass = "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+  maxHeight = "max-h-64",
+  id
+}) => (
+  <div>
+    <label htmlFor={id} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{label}</label>
+    <div id={id} className={`space-y-1 ${maxHeight} overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800`}>
+      {items.map(item => (
+        <button
+          key={item}
+          onClick={() => onSelect(item)}
+          className={`w-full text-left px-3 py-2 rounded-md text-sm truncate ${
+            selectedItem === item
+              ? `${selectedColorClass} font-medium`
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+          }`}
+        >
+          {item}
+        </button>
+      ))}
+    </div>
+  </div>
+);
 
 // --- Main App ---
 
@@ -518,11 +562,11 @@ export default function App() {
         const text = await response.text();
 
         const parsed = parsePrometheusMetrics(text);
-        const timestamp = new Date().getTime();
+        const timestamp = Date.now();
 
         setMetricsHistory(prev => {
           const newHistory = [...prev, { timestamp, metrics: parsed }];
-          if (newHistory.length > 60) return newHistory.slice(newHistory.length - 60);
+          if (newHistory.length > 60) return newHistory.slice(-60);
           return newHistory;
         });
         setError(null);
@@ -540,12 +584,12 @@ export default function App() {
         if (e.name === 'AbortError') {
           errType = 'timeout';
           errMsg = 'Request timed out';
-        } else if (e.name === 'TypeError' || (e.message && e.message.toLowerCase().includes('failed to fetch'))) {
+        } else if (e.name === 'TypeError' || e.message?.toLowerCase().includes('failed to fetch')) {
           // TypeError with "Failed to fetch" is the typical CORS or network error signature
           // When CORS blocks a request, the browser throws TypeError without detailed info
           errType = 'cors';
           errMsg = 'Network request failed (likely CORS or connection issue)';
-        } else if (e.message && e.message.includes('HTTP error')) {
+        } else if (e.message?.includes('HTTP error')) {
           errType = 'http';
         }
 
@@ -571,7 +615,7 @@ export default function App() {
   const handleManualParse = () => {
     try {
       const parsed = parsePrometheusMetrics(rawInput);
-      const timestamp = new Date().getTime();
+      const timestamp = Date.now();
       setMetricsHistory(prev => [...prev, { timestamp, metrics: parsed }].slice(-60));
       
       // Auto-discover
@@ -691,7 +735,7 @@ export default function App() {
   const writeLatencyRate = useMemo(() => {
       return computeRateDistribution(
           currentSnapshot, prevSnapshot, 'http_api_request_duration_seconds_bucket',
-          (item) => item.labels.path && item.labels.path.includes('/write'), timeDiff
+          (item) => item.labels.path?.includes('/write'), timeDiff
       );
   }, [currentSnapshot, prevSnapshot, timeDiff]);
 
@@ -699,7 +743,7 @@ export default function App() {
   const writeLatencyCumulative = useMemo(() => {
       if (!currentSnapshot) return [];
       const series = currentSnapshot.get('http_api_request_duration_seconds_bucket') || [];
-      const writeSeries = series.filter(item => item.labels.path && item.labels.path.includes('/write'));
+      const writeSeries = series.filter(item => item.labels.path?.includes('/write'));
 
       if (writeSeries.length === 0) return [];
 
@@ -711,7 +755,7 @@ export default function App() {
       });
 
       const sortedLe = Object.keys(buckets)
-          .map(l => ({ le: l === '+Inf' ? Infinity : parseFloat(l), leLabel: l }))
+          .map(l => ({ le: l === '+Inf' ? Infinity : Number.parseFloat(l), leLabel: l }))
           .sort((a, b) => a.le - b.le);
 
       return sortedLe.map((bucket, idx) => {
@@ -900,9 +944,7 @@ export default function App() {
                 <AlertCircle className="text-red-600 dark:text-red-400 mt-0.5" size={20} />
                 <div>
                     <h3 className="text-sm font-semibold text-red-800 dark:text-red-300">
-                        {errorType === 'cors' ? 'Connection Blocked (CORS/Network)' :
-                         errorType === 'timeout' ? 'Request Timeout' :
-                         errorType === 'http' ? 'HTTP Error' : 'Connection Error'}
+                        {getErrorTitle(errorType)}
                     </h3>
                     <p className="text-sm text-red-600 dark:text-red-400 mt-1">{error}</p>
                     {errorType === 'cors' && (
@@ -935,31 +977,28 @@ export default function App() {
                  <Card title="Connection Settings" icon={Wifi} className="h-full">
                     <div className="space-y-4">
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Metrics URL</label>
-                            <input 
-                                type="text" 
+                            <label htmlFor="metrics-url" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Metrics URL</label>
+                            <input
+                                id="metrics-url"
+                                type="text"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
                                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Poll Interval (ms)</label>
+                            <label htmlFor="poll-interval" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Poll Interval (ms)</label>
                             <input
+                                id="poll-interval"
                                 type="number"
                                 min="100"
                                 max="60000"
                                 value={intervalMs}
                                 onChange={(e) => {
-                                    const val = parseInt(e.target.value);
+                                    const val = Number.parseInt(e.target.value, 10);
+                                    if (Number.isNaN(val)) return;
                                     // Clamp to reasonable range: 100ms - 60000ms
-                                    if (!isNaN(val) && val >= 100 && val <= 60000) {
-                                        setIntervalMs(val);
-                                    } else if (!isNaN(val) && val < 100) {
-                                        setIntervalMs(100);
-                                    } else if (!isNaN(val) && val > 60000) {
-                                        setIntervalMs(60000);
-                                    }
+                                    setIntervalMs(Math.min(60000, Math.max(100, val)));
                                 }}
                                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm outline-none"
                             />
@@ -967,10 +1006,11 @@ export default function App() {
                         </div>
                         <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Use CORS Proxy</label>
+                                <label htmlFor="cors-proxy-toggle" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Use CORS Proxy</label>
                                 <p className="text-xs text-slate-400 mt-0.5">Route requests through server to bypass CORS restrictions</p>
                             </div>
                             <button
+                                id="cors-proxy-toggle"
                                 onClick={() => setUseProxy(!useProxy)}
                                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                                     useProxy ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
@@ -1024,61 +1064,22 @@ export default function App() {
 
                 {/* Query & Write Throughput Stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Total Writes</p>
-                        <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{(httpWriteCount / 1000000).toFixed(2)}M</p>
-                        <p className="text-xs text-slate-400">{formatBytes(httpWriteBytes)}</p>
-                    </div>
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Total Queries</p>
-                        <p className="text-lg font-bold text-blue-600 dark:text-blue-400">{httpQueryCount > 1000 ? (httpQueryCount / 1000).toFixed(1) + 'k' : httpQueryCount}</p>
-                        <p className="text-xs text-slate-400">{formatBytes(httpQueryResponseBytes)} sent</p>
-                    </div>
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Query Success</p>
-                        <p className="text-lg font-bold text-green-600 dark:text-green-400">{(qcRequestsSuccess / 1000).toFixed(1)}k</p>
-                        <p className="text-xs text-slate-400">{qcRequestsError} errors</p>
-                    </div>
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">QC Memory Free</p>
-                        <p className="text-lg font-bold text-violet-600 dark:text-violet-400">{formatBytes(qcMemoryUnused)}</p>
-                        <p className="text-xs text-slate-400">Query buffer</p>
-                    </div>
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Avg GC Pause</p>
-                        <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{formatDuration(avgGcDuration)}</p>
-                        <p className="text-xs text-slate-400">{(gcCpuFraction * 100).toFixed(2)}% CPU</p>
-                    </div>
-                    <div className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Heap Objects</p>
-                        <p className="text-lg font-bold text-slate-700 dark:text-slate-300">{(heapObjects / 1000000).toFixed(1)}M</p>
-                        <p className="text-xs text-slate-400">Live allocations</p>
-                    </div>
+                    <MiniStat label="Total Writes" value={formatCount(httpWriteCount, 2)} subtext={formatBytes(httpWriteBytes)} colorClass="text-emerald-600 dark:text-emerald-400" />
+                    <MiniStat label="Total Queries" value={formatCount(httpQueryCount)} subtext={`${formatBytes(httpQueryResponseBytes)} sent`} colorClass="text-blue-600 dark:text-blue-400" />
+                    <MiniStat label="Query Success" value={formatCount(qcRequestsSuccess)} subtext={`${qcRequestsError} errors`} colorClass="text-green-600 dark:text-green-400" />
+                    <MiniStat label="QC Memory Free" value={formatBytes(qcMemoryUnused)} subtext="Query buffer" colorClass="text-violet-600 dark:text-violet-400" />
+                    <MiniStat label="Avg GC Pause" value={formatDuration(avgGcDuration)} subtext={formatPercent(gcCpuFraction, 2) + ' CPU'} colorClass="text-amber-600 dark:text-amber-400" />
+                    <MiniStat label="Heap Objects" value={formatCount(heapObjects)} subtext="Live allocations" />
                 </div>
 
                 {/* Resource Inventory */}
                 <Card title="InfluxDB Resources" icon={Database} className="h-auto">
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{bucketsTotal}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Buckets</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">{orgsTotal}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Organizations</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-green-600 dark:text-green-400">{usersTotal}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Users</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{tokensTotal}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">API Tokens</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-cyan-600 dark:text-cyan-400">{dashboardsTotal}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Dashboards</p>
-                        </div>
+                        <CenteredStat value={bucketsTotal} label="Buckets" colorClass="text-blue-600 dark:text-blue-400" />
+                        <CenteredStat value={orgsTotal} label="Organizations" colorClass="text-purple-600 dark:text-purple-400" />
+                        <CenteredStat value={usersTotal} label="Users" colorClass="text-green-600 dark:text-green-400" />
+                        <CenteredStat value={tokensTotal} label="API Tokens" colorClass="text-amber-600 dark:text-amber-400" />
+                        <CenteredStat value={dashboardsTotal} label="Dashboards" colorClass="text-cyan-600 dark:text-cyan-400" />
                     </div>
                 </Card>
 
@@ -1171,22 +1172,10 @@ export default function App() {
                 {/* Memory Stats Grid */}
                 {memstatsBreakdown && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Heap Allocated</p>
-                            <p className="text-xl font-bold text-purple-600 dark:text-purple-400">{formatBytes(memstatsBreakdown.heapAlloc || 0)}</p>
-                        </div>
-                        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Heap Idle</p>
-                            <p className="text-xl font-bold text-violet-400">{formatBytes(memstatsBreakdown.heapIdle || 0)}</p>
-                        </div>
-                        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Stack In-Use</p>
-                            <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{formatBytes(memstatsBreakdown.stackInuse || 0)}</p>
-                        </div>
-                        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">System Total</p>
-                            <p className="text-xl font-bold text-slate-700 dark:text-slate-200">{formatBytes(memstatsBreakdown.sysTotal || 0)}</p>
-                        </div>
+                        <MiniStat label="Heap Allocated" value={formatBytes(memstatsBreakdown.heapAlloc || 0)} colorClass="text-purple-600 dark:text-purple-400" />
+                        <MiniStat label="Heap Idle" value={formatBytes(memstatsBreakdown.heapIdle || 0)} colorClass="text-violet-400" />
+                        <MiniStat label="Stack In-Use" value={formatBytes(memstatsBreakdown.stackInuse || 0)} colorClass="text-emerald-600 dark:text-emerald-400" />
+                        <MiniStat label="System Total" value={formatBytes(memstatsBreakdown.sysTotal || 0)} colorClass="text-slate-700 dark:text-slate-200" />
                     </div>
                 )}
             </div>
@@ -1220,14 +1209,14 @@ export default function App() {
                     />
                      <StatBadge
                         label="BoltDB Reads"
-                        value={(boltdbReads / 1000000).toFixed(1) + 'M'}
+                        value={formatCount(boltdbReads)}
                         subtext="Total reads"
                         icon={HardDrive}
                         color="blue"
                     />
                      <StatBadge
                         label="BoltDB Writes"
-                        value={(boltdbWrites / 1000).toFixed(1) + 'k'}
+                        value={formatCount(boltdbWrites)}
                         subtext="Total writes"
                         icon={HardDrive}
                         color="green"
@@ -1237,30 +1226,12 @@ export default function App() {
                 {/* Storage Engine Section */}
                 <Card title="Storage Engine" icon={HardDrive}>
                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{storageBucketSeries}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Total Series</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">{storageBucketMeasurements}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Measurements</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{formatBytes(storageShardDiskSize)}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Shard Disk Size</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{storageTsmFiles}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">TSM Files</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-cyan-600 dark:text-cyan-400">{formatBytes(storageWalSize)}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">WAL Size</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className={`text-2xl font-bold ${storageCompactionsActive > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-600 dark:text-slate-400'}`}>{storageCompactionsActive}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Compactions Active</p>
-                        </div>
+                        <CenteredStat value={formatCount(storageBucketSeries)} label="Total Series" colorClass="text-blue-600 dark:text-blue-400" />
+                        <CenteredStat value={formatCount(storageBucketMeasurements)} label="Measurements" colorClass="text-purple-600 dark:text-purple-400" />
+                        <CenteredStat value={formatBytes(storageShardDiskSize)} label="Shard Disk Size" colorClass="text-emerald-600 dark:text-emerald-400" />
+                        <CenteredStat value={formatCount(storageTsmFiles)} label="TSM Files" colorClass="text-amber-600 dark:text-amber-400" />
+                        <CenteredStat value={formatBytes(storageWalSize)} label="WAL Size" colorClass="text-cyan-600 dark:text-cyan-400" />
+                        <CenteredStat value={formatCount(storageCompactionsActive)} label="Compactions Active" colorClass={storageCompactionsActive > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-600 dark:text-slate-400'} />
                     </div>
                     {(storageCompactionsFailed > 0 || storageWriterTimeouts > 0) && (
                         <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
@@ -1296,36 +1267,18 @@ export default function App() {
                 {/* Task Executor Section */}
                 <Card title="Task Executor" icon={Timer}>
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-green-600 dark:text-green-400">{taskRunsSuccess}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Successful Runs</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className={`text-2xl font-bold ${taskRunsFailed > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>{taskRunsFailed}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Failed Runs</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className={`text-2xl font-bold ${taskErrors > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>{taskErrors}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Errors</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{taskRunsActive}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Active Workers</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{currentExecution}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">In Scheduler</p>
-                        </div>
-                        <div className="text-center p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
-                            <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">{(taskQueueUsage * 100).toFixed(0)}%</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Queue Usage</p>
-                        </div>
+                        <CenteredStat value={formatCount(taskRunsSuccess)} label="Successful Runs" colorClass="text-green-600 dark:text-green-400" />
+                        <CenteredStat value={formatCount(taskRunsFailed)} label="Failed Runs" colorClass={taskRunsFailed > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'} />
+                        <CenteredStat value={taskErrors} label="Errors" colorClass={taskErrors > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'} />
+                        <CenteredStat value={taskRunsActive} label="Active Workers" colorClass="text-blue-600 dark:text-blue-400" />
+                        <CenteredStat value={currentExecution} label="In Scheduler" colorClass="text-amber-600 dark:text-amber-400" />
+                        <CenteredStat value={formatPercent(taskQueueUsage, 0)} label="Queue Usage" colorClass="text-purple-600 dark:text-purple-400" />
                     </div>
                     {(taskWorkersBusy > 0.8) && (
                         <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
                             <p className="text-sm text-amber-700 dark:text-amber-300 flex items-center gap-2">
                                 <AlertTriangle size={16} />
-                                <span>Workers are {(taskWorkersBusy * 100).toFixed(0)}% busy - consider scaling</span>
+                                <span>Workers are {formatPercent(taskWorkersBusy, 0)} busy - consider scaling</span>
                             </p>
                         </div>
                     )}
@@ -1349,24 +1302,14 @@ export default function App() {
                     {discovered.counters.length > 0 ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="lg:col-span-1 space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Metric</label>
-                                    <div className="space-y-1 max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800">
-                                        {discovered.counters.map(c => (
-                                            <button
-                                                key={c}
-                                                onClick={() => setSelectedCounter(c)}
-                                                className={`w-full text-left px-3 py-2 rounded-md text-sm truncate ${
-                                                    selectedCounter === c 
-                                                    ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 font-medium' 
-                                                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                                                }`}
-                                            >
-                                                {c}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+                                <MetricSelectorList
+                                    label="Select Metric"
+                                    items={discovered.counters}
+                                    selectedItem={selectedCounter}
+                                    onSelect={setSelectedCounter}
+                                    selectedColorClass="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300"
+                                    id="counter-selector"
+                                />
 
                                 {selectedCounter && (
                                     <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
@@ -1391,7 +1334,7 @@ export default function App() {
                             </div>
                             
                             <div className="lg:col-span-2">
-                                <Card title={`Breakdown: ${selectedCounter} ${selectedCounterGroupBy !== 'All' ? `(by ${selectedCounterGroupBy})` : ''}`} className="h-96">
+                                <Card title={getChartTitle('Breakdown', selectedCounter, selectedCounterGroupBy)} className="h-96">
                                      {activeCounterData.length > 0 ? (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={activeCounterData} layout="vertical" margin={{ left: 40, right: 40, bottom: 20 }}>
@@ -1431,25 +1374,15 @@ export default function App() {
                     {discovered.histograms.length > 0 ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="lg:col-span-1 space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Metric</label>
-                                    <div className="space-y-1 max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800">
-                                        {discovered.histograms.map(h => (
-                                            <button
-                                                key={h}
-                                                onClick={() => setSelectedHist(h)}
-                                                className={`w-full text-left px-3 py-2 rounded-md text-sm truncate ${
-                                                    selectedHist === h 
-                                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-medium' 
-                                                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                                                }`}
-                                            >
-                                                {h}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                
+                                <MetricSelectorList
+                                    label="Select Metric"
+                                    items={discovered.histograms}
+                                    selectedItem={selectedHist}
+                                    onSelect={setSelectedHist}
+                                    selectedColorClass="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                                    id="histogram-selector"
+                                />
+
                                 {selectedHist && (
                                     <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
                                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
@@ -1474,7 +1407,7 @@ export default function App() {
                             </div>
 
                             <div className="lg:col-span-2">
-                                <Card title={`Distribution: ${selectedHist} ${selectedHistGroupBy !== 'All' ? `(by ${selectedHistGroupBy})` : ''}`} className="h-96">
+                                <Card title={getChartTitle('Distribution', selectedHist, selectedHistGroupBy)} className="h-96">
                                      {activeHistResult.data.length > 0 ? (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={activeHistResult.data} margin={{bottom: 20}}>
@@ -1519,22 +1452,15 @@ export default function App() {
                     {discovered.summaries.length > 0 ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="lg:col-span-1">
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Summary</label>
-                                <div className="space-y-1 max-h-96 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-2 bg-white dark:bg-slate-800">
-                                    {discovered.summaries.map(s => (
-                                        <button
-                                            key={s}
-                                            onClick={() => setSelectedSummary(s)}
-                                            className={`w-full text-left px-3 py-2 rounded-md text-sm truncate ${
-                                                selectedSummary === s 
-                                                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300 font-medium' 
-                                                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                                            }`}
-                                        >
-                                            {s}
-                                        </button>
-                                    ))}
-                                </div>
+                                <MetricSelectorList
+                                    label="Select Summary"
+                                    items={discovered.summaries}
+                                    selectedItem={selectedSummary}
+                                    onSelect={setSelectedSummary}
+                                    selectedColorClass="bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                                    maxHeight="max-h-96"
+                                    id="summary-selector"
+                                />
                             </div>
                             <div className="lg:col-span-2">
                                 <Card title={`Percentiles: ${selectedSummary} (Top 5 Slowest)`} className="h-96">
