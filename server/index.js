@@ -151,16 +151,13 @@ app.use((err, _req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// In production, serve static files from client build
-if (process.env.NODE_ENV === 'production') {
-  const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
-  app.use(express.static(clientDistPath));
+const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+app.use(express.static(clientDistPath));
 
-  // SPA fallback
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
-}
+// SPA fallback
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(clientDistPath, 'index.html'));
+});
 
 const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

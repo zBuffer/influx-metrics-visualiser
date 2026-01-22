@@ -887,7 +887,7 @@ export default function App() {
               <Activity className="text-white" size={20} />
             </div>
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
-              InfluxDB Visualizer
+              InfluxDB Visualiser
             </h1>
           </div>
           
