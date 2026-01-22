@@ -73,6 +73,37 @@ Preview the production build locally:
 npm run preview
 ```
 
+## Docker
+
+### Building the Docker Image
+
+```bash
+docker build -t influx-metrics-visualiser .
+```
+
+### Running the Container
+
+```bash
+docker run -d -p 3001:3001 --name influx-metrics influx-metrics-visualiser
+```
+
+The application will be available at `http://localhost:3001`.
+
+### Using a Custom Port
+
+```bash
+docker run -d -p 8080:3001 --name influx-metrics influx-metrics-visualiser
+```
+
+This maps the container's port 3001 to your host's port 8080, making the app available at `http://localhost:8080`.
+
+### Stopping the Container
+
+```bash
+docker stop influx-metrics
+docker rm influx-metrics
+```
+
 ## Configuration
 
 ### Environment Variables
