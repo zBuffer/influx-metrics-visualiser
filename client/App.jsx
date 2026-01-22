@@ -1441,7 +1441,31 @@ export default function App() {
                                                         <YAxis stroke="#94a3b8" />
                                                         <RechartsTooltip
                                                             cursor={{fill: 'transparent'}}
-                                                            contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
+                                                            content={({ active, payload, label }) => {
+                                                                if (!active || !payload || payload.length === 0) return null;
+                                                                const filtered = payload
+                                                                    .filter(item => item.value > 0)
+                                                                    .sort((a, b) => b.value - a.value);
+                                                                if (filtered.length === 0) return null;
+                                                                const maxItems = 10;
+                                                                const displayed = filtered.slice(0, maxItems);
+                                                                const remaining = filtered.length - maxItems;
+                                                                return (
+                                                                    <div className="bg-slate-800 border-none rounded-lg p-2 text-white text-xs">
+                                                                        <div className="font-semibold mb-1 text-slate-300">{label}</div>
+                                                                        {displayed.map((item) => (
+                                                                            <div key={item.dataKey} className="flex items-center gap-2 py-0.5">
+                                                                                <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: item.color }} />
+                                                                                <span className="truncate max-w-[150px]" title={item.name}>{item.name}</span>
+                                                                                <span className="ml-auto font-medium">{item.value}</span>
+                                                                            </div>
+                                                                        ))}
+                                                                        {remaining > 0 && (
+                                                                            <div className="text-slate-400 pt-1 border-t border-slate-600 mt-1">+{remaining} more</div>
+                                                                        )}
+                                                                    </div>
+                                                                );
+                                                            }}
                                                         />
                                                         {activeHistResult.keys.map((key, index) => (
                                                             <Bar
