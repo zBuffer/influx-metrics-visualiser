@@ -287,7 +287,7 @@ const computeRateDistribution = (currMetrics, prevMetrics, metricName, filterFn,
             count: Math.max(0, exclusiveRate),
             le: bucket.le
         };
-    }).filter(b => b.le !== Infinity && b.count > 0.001);
+    }).filter(b => b.count > 0.001);
 };
 
 // --- Go Memstats Breakdown Helpers ---
@@ -790,7 +790,7 @@ export default function App() {
           else rangeLabel = `${prevLeLabel}-${bucket.leLabel}s`;
 
           return { range: rangeLabel, count: exclusive, le: bucket.le };
-      }).filter(b => b.le !== Infinity && b.count > 0);
+      }).filter(b => b.count > 0);
   }, [currentSnapshot]);
 
   // Use rate data if available, otherwise fall back to cumulative

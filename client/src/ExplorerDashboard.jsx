@@ -815,7 +815,7 @@ const computeWidgetData = (metrics, metricName, metricType, config) => {
         row[gKey] = Math.max(0, currVal - prevVal);
       });
       return row;
-    }).filter(r => r.le !== Infinity);
+    });
 
     return { type: 'histogram', data, keys: Object.keys(groups) };
   }
