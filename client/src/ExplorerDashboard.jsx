@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Responsive, WidthProvider } from 'react-grid-layout/legacy';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, Cell
+  ResponsiveContainer, Cell, LineChart, Line, Legend
 } from 'recharts';
 import {
   X, Settings, GripVertical, Info, Plus, Trash2, Lock, Unlock,
@@ -470,6 +470,7 @@ const WidgetSettings = ({ config, metricMeta, onUpdate, onClose, anchorRef }) =>
                 <option value="value">Single Value</option>
                 <option value="doughnut">Gauge Chart</option>
                 <option value="bar">Bar Chart</option>
+                <option value="timeline">Timeline Chart</option>
               </select>
             </div>
           )}
@@ -592,6 +593,182 @@ const SingleValueDisplay = ({ value, unitFormat, label }) => {
       </p>
       {label && <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">{label}</p>}
     </div>
+  );
+};
+
+/**
+ * Multi-value display grid for grouped gauge metrics in value mode
+ */
+const MultiValueDisplay = ({ data, unitFormat }) => {
+  if (!data || data.length === 0) return null;
+
+  // Calculate grid columns based on item count
+  const cols = data.length <= 2 ? data.length : data.length <= 4 ? 2 : data.length <= 6 ? 3 : 4;
+
+  return (
+    <div
+      className="grid gap-2 h-full p-2 overflow-auto"
+      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+    >
+      {data.map((item) => (
+        <div
+          key={item.name}
+          className="flex flex-col items-center justify-center p-2 rounded-lg bg-slate-50 dark:bg-slate-800/50"
+        >
+          <p className="text-lg font-bold text-slate-800 dark:text-white">
+            {formatValue(item.value, unitFormat)}
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 text-center truncate w-full" title={item.name}>
+            {item.name}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/**
+ * Multi-gauge display grid for grouped gauge metrics in doughnut mode
+ */
+const MultiGaugeDisplay = ({ data, unitFormat, maxValue }) => {
+  if (!data || data.length === 0) return null;
+
+  // Calculate max value for all gauges (use provided max or find the max in data)
+  const effectiveMax = maxValue || Math.max(...data.map(d => d.value)) * 1.2 || 100;
+
+  // Calculate grid columns based on item count
+  const cols = data.length <= 2 ? data.length : data.length <= 4 ? 2 : data.length <= 6 ? 3 : 4;
+
+  return (
+    <div
+      className="grid gap-1 h-full p-1 overflow-auto"
+      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+    >
+      {data.map((item, i) => (
+        <div key={item.name} className="flex flex-col items-center justify-center min-h-0">
+          <MiniGaugeChart
+            value={item.value}
+            max={effectiveMax}
+            label={item.name}
+            unitFormat={unitFormat}
+            color={CHART_COLORS[i % CHART_COLORS.length]}
+          />
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/**
+ * Smaller gauge chart for multi-gauge display
+ */
+const MiniGaugeChart = ({ value, max, label, unitFormat, color }) => {
+  const percentage = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  const circumference = Math.PI * 80; // Smaller arc
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <svg width="100" height="60" viewBox="0 0 100 60">
+        <path
+          d="M 10 55 A 40 40 0 0 1 90 55"
+          fill="none"
+          stroke="#e2e8f0"
+          strokeWidth="8"
+          strokeLinecap="round"
+          className="dark:stroke-slate-700"
+        />
+        <path
+          d="M 10 55 A 40 40 0 0 1 90 55"
+          fill="none"
+          stroke={color}
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
+        />
+        <text x="50" y="40" textAnchor="middle" className="fill-slate-800 dark:fill-white text-xs font-bold">
+          {formatValue(value, unitFormat)}
+        </text>
+      </svg>
+      {label && (
+        <p className="text-[10px] text-slate-500 dark:text-slate-400 text-center truncate w-full px-1" title={label}>
+          {label}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Timeline Chart for gauge metrics - plots historical values over time
+ */
+const TimelineChart = ({ history, unitFormat }) => {
+  // Debug logging
+  console.log('[TimelineChart] history:', history);
+
+  if (!history || history.length === 0) {
+    return <div className="flex items-center justify-center h-full text-slate-400">Collecting data...</div>;
+  }
+
+  // Need at least 2 points to draw a line
+  if (history.length < 2) {
+    return <div className="flex items-center justify-center h-full text-slate-400">Collecting data... ({history.length}/2)</div>;
+  }
+
+  // Collect all unique data keys from the history (excluding 'time')
+  const allKeys = new Set();
+  history.forEach(point => {
+    Object.keys(point).forEach(key => {
+      if (key !== 'time') allKeys.add(key);
+    });
+  });
+  const dataKeys = Array.from(allKeys);
+
+  // Single line if only 'value' key, multiple lines otherwise
+  const isMultiLine = dataKeys.length > 1 || (dataKeys.length === 1 && dataKeys[0] !== 'value');
+
+  // Build lines array to avoid Fragment issues with Recharts
+  const lines = dataKeys.map((key, i) => (
+    <Line
+      key={key}
+      type="monotone"
+      dataKey={key}
+      name={isMultiLine ? key : 'Value'}
+      stroke={isMultiLine ? CHART_COLORS[i % CHART_COLORS.length] : '#8b5cf6'}
+      strokeWidth={2}
+      dot={false}
+      activeDot={{ r: 4 }}
+      connectNulls
+      isAnimationActive={true}
+    />
+  ));
+
+  return (
+    <ResponsiveContainer width="100%" height="100%" debounce={50}>
+      <LineChart data={history} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+        <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
+        <XAxis
+          dataKey="time"
+          tick={{ fontSize: 10 }}
+          tickLine={false}
+          axisLine={false}
+        />
+        <YAxis
+          tickFormatter={(v) => formatValue(v, unitFormat)}
+          tick={{ fontSize: 10 }}
+          width={50}
+          tickLine={false}
+          axisLine={false}
+        />
+        <RechartsTooltip
+          content={<CustomTooltip unitFormat={unitFormat} />}
+        />
+        {isMultiLine && <Legend />}
+        {lines}
+      </LineChart>
+    </ResponsiveContainer>
   );
 };
 
@@ -785,12 +962,20 @@ const computeWidgetData = (metrics, metricName, metricType, config) => {
   return { type: 'single', value: total };
 };
 
+// Maximum number of history points to keep for timeline charts
+const MAX_HISTORY_POINTS = 60;
+
 /**
  * MetricWidget Component - Renders appropriate visualization based on metric type
  */
 const MetricWidget = ({ widgetId, config, metrics, metadata, catalog, onRemove, onUpdate }) => {
   const [showSettings, setShowSettings] = useState(false);
   const settingsButtonRef = useRef(null);
+
+  // History tracking for timeline display mode
+  const [timelineHistory, setTimelineHistory] = useState([]);
+  const lastGroupByRef = useRef(config.groupBy);
+  const lastTimeRef = useRef(null);
 
   const metricMeta = useMemo(() => {
     for (const group of catalog) {
@@ -805,11 +990,58 @@ const MetricWidget = ({ widgetId, config, metrics, metadata, catalog, onRemove, 
     [metrics, config, metricMeta.type]
   );
 
+  // Clear history when groupBy changes
+  useEffect(() => {
+    if (lastGroupByRef.current !== config.groupBy) {
+      setTimelineHistory([]);
+      lastTimeRef.current = null;
+      lastGroupByRef.current = config.groupBy;
+    }
+  }, [config.groupBy]);
+
+  // Track history for timeline display
+  useEffect(() => {
+    if (config.displayMode !== 'timeline') return;
+    if (widgetData.type === 'empty') return;
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Skip if we already added a point at this exact timestamp
+    if (lastTimeRef.current === timeStr) return;
+    lastTimeRef.current = timeStr;
+
+    let newPoint;
+    if (widgetData.type === 'single') {
+      // Single value mode - flat structure { time, value }
+      newPoint = { time: timeStr, value: widgetData.value };
+    } else if (widgetData.type === 'bar') {
+      // Grouped mode - flat structure { time, groupName1: val1, groupName2: val2, ... }
+      newPoint = { time: timeStr };
+      widgetData.data.forEach(item => {
+        newPoint[item.name] = item.value;
+      });
+    } else {
+      return; // Don't track history for other types
+    }
+
+    setTimelineHistory(prev => {
+      const updated = [...prev, newPoint];
+      // Keep only the last MAX_HISTORY_POINTS entries
+      return updated.slice(-MAX_HISTORY_POINTS);
+    });
+  }, [widgetData, config.displayMode]);
+
   const renderChart = () => {
     const unitFormat = config.unitFormat || 'raw';
 
     if (widgetData.type === 'empty') {
       return <div className="flex items-center justify-center h-full text-slate-400">No data available</div>;
+    }
+
+    // Handle timeline display mode for gauges (both single and bar types)
+    if (metricMeta.type === 'gauge' && config.displayMode === 'timeline') {
+      return <TimelineChart history={timelineHistory} unitFormat={unitFormat} />;
     }
 
     if (widgetData.type === 'single') {
@@ -818,32 +1050,66 @@ const MetricWidget = ({ widgetId, config, metrics, metadata, catalog, onRemove, 
         const maxVal = config.maxValue || widgetData.value * 1.2 || 100;
         return <GaugeChart value={widgetData.value} max={maxVal} unitFormat={unitFormat} />;
       }
+      // Handle bar display mode for single values - show as single bar chart
+      if (metricMeta.type === 'gauge' && displayMode === 'bar') {
+        const singleBarData = [{ name: 'Value', value: widgetData.value }];
+        return (
+          <ResponsiveContainer width="100%" height="100%" debounce={50}>
+            <BarChart data={singleBarData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tickFormatter={(v) => formatValue(v, unitFormat)} tick={{ fontSize: 10 }} width={50} />
+              <RechartsTooltip content={<CustomTooltip unitFormat={unitFormat} />} />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]} fill="#8b5cf6" />
+            </BarChart>
+          </ResponsiveContainer>
+        );
+      }
       return <SingleValueDisplay value={widgetData.value} unitFormat={unitFormat} />;
     }
 
-    if (widgetData.type === 'bar' || widgetData.type === 'histogram') {
+    if (widgetData.type === 'bar') {
       const data = widgetData.data || [];
-      const keys = widgetData.keys || ['value'];
-      const dataKey = widgetData.type === 'histogram' ? 'range' : 'name';
-      // For histograms: Y-axis is count (observations per bucket), X-axis labels use the metric unit
-      // For bar charts: Y-axis uses the metric unit
-      const yAxisFormat = widgetData.type === 'histogram' ? 'count' : unitFormat;
-      const tooltipFormat = widgetData.type === 'histogram' ? 'count' : unitFormat;
+      const displayMode = config.displayMode || 'value';
+
+      // For gauge metrics with grouped data, respect the display mode
+      if (metricMeta.type === 'gauge') {
+        if (displayMode === 'value') {
+          return <MultiValueDisplay data={data} unitFormat={unitFormat} />;
+        }
+        if (displayMode === 'doughnut') {
+          return <MultiGaugeDisplay data={data} unitFormat={unitFormat} maxValue={config.maxValue} />;
+        }
+        // displayMode === 'bar' falls through to bar chart below
+      }
 
       return (
         <ResponsiveContainer width="100%" height="100%" debounce={50}>
           <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
-            <XAxis dataKey={dataKey} tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
-            <YAxis tickFormatter={(v) => formatValue(v, yAxisFormat)} tick={{ fontSize: 10 }} width={50} />
-            <RechartsTooltip content={<CustomTooltip unitFormat={tooltipFormat} />} />
-            {widgetData.type === 'bar' ? (
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-              </Bar>
-            ) : (
-              keys.map((k, i) => <Bar key={k} dataKey={k} fill={CHART_COLORS[i % CHART_COLORS.length]} stackId="a" />)
-            )}
+            <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
+            <YAxis tickFormatter={(v) => formatValue(v, unitFormat)} tick={{ fontSize: 10 }} width={50} />
+            <RechartsTooltip content={<CustomTooltip unitFormat={unitFormat} />} />
+            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+              {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    if (widgetData.type === 'histogram') {
+      const data = widgetData.data || [];
+      const keys = widgetData.keys || ['value'];
+
+      return (
+        <ResponsiveContainer width="100%" height="100%" debounce={50}>
+          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-slate-200 dark:stroke-slate-700" />
+            <XAxis dataKey="range" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
+            <YAxis tickFormatter={(v) => formatValue(v, 'count')} tick={{ fontSize: 10 }} width={50} />
+            <RechartsTooltip content={<CustomTooltip unitFormat="count" />} />
+            {keys.map((k, i) => <Bar key={k} dataKey={k} fill={CHART_COLORS[i % CHART_COLORS.length]} stackId="a" />)}
           </BarChart>
         </ResponsiveContainer>
       );
