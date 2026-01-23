@@ -119,6 +119,77 @@ const formatValue = (value, unitFormat, maxValue = null) => {
 };
 
 /**
+ * Tooltip Component - Shows on hover
+ */
+const Tooltip = ({ children, content }) => {
+  const [isVisible, setIsVisible] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  useEffect(() => {
+    if (!isVisible || !triggerRef.current) return;
+
+    const updatePosition = () => {
+      if (!triggerRef.current || !tooltipRef.current) return;
+
+      const triggerRect = triggerRef.current.getBoundingClientRect();
+      const tooltipRect = tooltipRef.current.getBoundingClientRect();
+      const gap = 8;
+      const margin = 12;
+
+      // Try to position below the trigger
+      let top = triggerRect.bottom + gap;
+      let left = triggerRect.left + (triggerRect.width / 2) - (tooltipRect.width / 2);
+
+      // Adjust if would go off right edge
+      if (left + tooltipRect.width > window.innerWidth - margin) {
+        left = window.innerWidth - tooltipRect.width - margin;
+      }
+      // Adjust if would go off left edge
+      if (left < margin) {
+        left = margin;
+      }
+
+      // If would go off bottom, position above
+      if (top + tooltipRect.height > window.innerHeight - margin) {
+        top = triggerRect.top - tooltipRect.height - gap;
+      }
+
+      setPosition({ top, left });
+    };
+
+    // Use requestAnimationFrame for smooth positioning
+    const rafId = requestAnimationFrame(updatePosition);
+    return () => cancelAnimationFrame(rafId);
+  }, [isVisible]);
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onMouseEnter={() => setIsVisible(true)}
+        onMouseLeave={() => setIsVisible(false)}
+        onFocus={() => setIsVisible(true)}
+        onBlur={() => setIsVisible(false)}
+      >
+        {children}
+      </div>
+      {isVisible && content && createPortal(
+        <div
+          ref={tooltipRef}
+          className="fixed z-[10000] max-w-xs px-3 py-2 text-sm bg-slate-800 dark:bg-slate-700 text-white rounded-lg shadow-lg pointer-events-none"
+          style={{ top: position.top, left: position.left }}
+        >
+          {content}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+};
+
+/**
  * Type Badge Component
  */
 const TypeBadge = ({ type, size = 'sm' }) => {
@@ -843,9 +914,11 @@ const MetricWidget = ({ widgetId, config, metrics, metadata, catalog, onRemove, 
           {config.metricName}
         </span>
         {metricMeta.help && (
-          <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded group relative" title={metricMeta.help}>
-            <Info size={14} className="text-slate-400" />
-          </button>
+          <Tooltip content={metricMeta.help}>
+            <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded">
+              <Info size={14} className="text-slate-400" />
+            </button>
+          </Tooltip>
         )}
         <button
           ref={settingsButtonRef}
@@ -1116,6 +1189,7 @@ const ExplorerDashboard = ({ metricsText }) => {
           isResizable={!isLocked}
           draggableHandle=".drag-handle"
           margin={[12, 12]}
+          containerPadding={[0, 12]}
           compactType="vertical"
           preventCollision={false}
           useCSSTransforms={true}
