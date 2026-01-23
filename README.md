@@ -2,6 +2,8 @@
 
 A real-time metrics visualization dashboard for InfluxDB and Prometheus-format metrics. This web application provides an intuitive interface to monitor, explore, and analyze time-series metrics from InfluxDB instances or any Prometheus-compatible metrics endpoint.
 
+> ⚠️ **Notice**: This is a vibe coded local tool and is not intended to be hosted and exposed to the internet.
+
 ![Dashboard Preview](docs/dashboard-preview.png)
 
 ## Features
