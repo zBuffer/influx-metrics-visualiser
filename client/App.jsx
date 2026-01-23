@@ -1203,13 +1203,15 @@ export default function App() {
 
         {activeTab === 'internals' && (
              <div className="space-y-6">
-                <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-800 rounded-lg text-sm text-orange-800 dark:text-orange-300 flex items-start gap-3">
+                {(goroutines > 5000 || avgSchedulerDelay > 60) && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-300 flex items-start gap-3">
                     <Zap size={18} className="mt-0.5" />
                     <div>
                         <p className="font-semibold">Performance Analysis</p>
                         <p>Based on current metrics: Goroutine count is {goroutines}, and average task scheduling delay is {formatDuration(avgSchedulerDelay)}. Large scheduling delays often indicate resource contention or blocking tasks.</p>
                     </div>
                 </div>
+                )}
 
                 {/* Scheduler & BoltDB Stats */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
