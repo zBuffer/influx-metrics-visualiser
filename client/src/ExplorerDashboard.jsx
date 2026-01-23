@@ -631,7 +631,7 @@ const computeWidgetData = (metrics, metricName, metricType, config) => {
           .sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b));
 
         // Build data rows for each quantile, filtering out rows where all values are zero/NaN
-        const data = sortedQuantiles
+        const quantileData = sortedQuantiles
           .map(q => {
             const row = { name: `P${Number.parseFloat(q) * 100}` };
             groupKeys.forEach(gKey => {
@@ -644,14 +644,23 @@ const computeWidgetData = (metrics, metricName, metricType, config) => {
             return groupKeys.some(gKey => row[gKey] > 0 && Number.isFinite(row[gKey]));
           });
 
+        // If all quantile rows were NaN/zero, fall back to showing grouped averages as bar chart
+        if (quantileData.length === 0 && Object.keys(groupAvgs).length > 0) {
+          const data = Object.entries(groupAvgs)
+            .map(([name, value]) => ({ name, value }))
+            .sort((a, b) => b.value - a.value);
+
+          return { type: 'bar', data };
+        }
+
         // Add Avg row at the beginning using per-group averages from sum/count
         const avgRow = { name: 'Avg' };
         groupKeys.forEach(gKey => {
           avgRow[gKey] = groupAvgs[gKey] || 0;
         });
-        data.unshift(avgRow);
+        quantileData.unshift(avgRow);
 
-        return { type: 'summary-grouped', data, keys: groupKeys, avg, sum, count };
+        return { type: 'summary-grouped', data: quantileData, keys: groupKeys, avg, sum, count };
       }
 
       // No quantile data, but we have sum/count - show grouped averages
